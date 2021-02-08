@@ -1,0 +1,18 @@
+[package]
+name = "graceful-shutdown"
+version = "0.1.0"
+authors = ["Thayne McCombs <astrothayne@gmail.com>"]
+edition = "2018"
+
+[features]
+# This can be removed in rust 1.51
+stream = ["futures-core"]
+
+[dependencies]
+pin-project-lite = "0.2"
+
+[dependencies.futures-core]
+version = "0.3.12"
+optional = true
+
+

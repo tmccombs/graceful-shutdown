@@ -1,8 +1,8 @@
+use super::Handle;
 use futures_core::stream::Stream;
+use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use super::Handle;
-use pin_project_lite::pin_project;
 
 pin_project! {
     #[project = GracefulStreamProj]
@@ -32,15 +32,13 @@ impl<S: Stream> Stream for GracefulStream<S> {
         use GracefulStreamProj::*;
         match self.as_mut().project() {
             Done => Poll::Ready(None),
-            Running { shutdown, stream } => {
-                match stream.poll_next(cx) {
-                    Poll::Pending if shutdown.is_shutting_down() => {
-                        self.set(GracefulStream::Done);
-                        Poll::Ready(None)
-                    }
-                    res => res
+            Running { shutdown, stream } => match stream.poll_next(cx) {
+                Poll::Pending if shutdown.is_shutting_down() => {
+                    self.set(GracefulStream::Done);
+                    Poll::Ready(None)
                 }
-            }
+                res => res,
+            },
         }
     }
 }

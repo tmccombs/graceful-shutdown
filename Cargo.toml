@@ -3,6 +3,11 @@ name = "graceful-shutdown"
 version = "0.1.0"
 authors = ["Thayne McCombs <astrothayne@gmail.com>"]
 edition = "2018"
+license = "Apache-2.0"
+repository = "https://github.com/tmccombs/graceful-shutdown"
+description = "Graceful Shutdown for async code"
+categories = ["asynchronous"]
+keywords = ["async", "graceful", "shutdown"]
 
 [features]
 # This can be removed in rust 1.51

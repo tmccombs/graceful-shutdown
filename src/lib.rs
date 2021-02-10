@@ -131,10 +131,33 @@ impl Handle {
     /// instance. And once all pending tasks are completed, the `Shutdown` future will
     /// complete.
     pub fn shutdown(&self) {
-        // Clear the "active" flag.
-        self.0.state.fetch_and(MAX_PENDING, Ordering::Relaxed);
-        self.0.wake();
+        self.0.shutdown();
     }
+
+    /// Return a new future that waits for `f` to complete, then initiates shutdown.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use graceful_shutdown::Shutdown;
+    /// # async fn ctrl_c() -> Result<(), ()> { Ok(()) }
+    /// # fn cleanup() { }
+    /// let shutdown = Shutdown::new();
+    /// let interrupt = shutdown.handle().shutdown_after(ctrl_c());
+    /// async {
+    ///     interrupt.await.expect("Unable to listen to signal");
+    ///     // peform additional cleanup before shutting down
+    ///     cleanup();
+    ///     shutdown.await;
+    /// }
+    /// # ;
+    /// ```
+    pub async fn shutdown_after<F: Future>(self, f: F) -> F::Output {
+        let result = f.await;
+        self.shutdown();
+        result
+    }
+
 
     #[inline]
     pub fn is_shutting_down(&self) -> bool {
@@ -178,6 +201,12 @@ impl Handle {
 }
 
 impl Inner {
+    fn shutdown(&self) {
+        // Clear the "active" flag.
+        self.state.fetch_and(MAX_PENDING, Ordering::Relaxed);
+        self.wake();
+    }
+
     fn start_task(&self) {
         assert_ne!(
             self.state.fetch_add(1, Ordering::Relaxed),
@@ -265,8 +294,3 @@ impl Drop for Draining {
 mod stream;
 #[cfg(feature = "stream")]
 pub use stream::GracefulStream;
-
-// TODO:
-// - Automatically shutdown after a future completes
-// - Timeout for Shutdown future (tokio/time feature)
-// - Macro to simplify graceful shutdown with timeout.

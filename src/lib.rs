@@ -1,5 +1,17 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 //#![deny(missing_docs)]
+
+//! A library to make it easier to handle graceful shutdowns.
+//!
+//! This provides tools to wait for pending tasks to complete before finalizing shutdown.
+//!
+//! # Examples
+//!
+//! ```no_run
+//! ```
+//!
+//!
+
 #[cfg(feature = "stream")]
 use futures_core::stream::Stream;
 use pin_project_lite::pin_project;
@@ -26,6 +38,8 @@ pin_project! {
         terminator: T,
     }
 }
+
+struct ShutdownInitiated<'a>(&'a mut Arc<Inner>);
 
 /// A shared reference to a Shutdown.
 ///
@@ -102,6 +116,12 @@ impl Shutdown {
         }
     }
 
+    /// Return a `Future` that waits until shutdown has been initiated, but doesn't wait
+    /// for pending tasks to complete.
+    pub fn initiated(&mut self) -> impl Future<Output = ()> + '_ {
+        ShutdownInitiated(&mut self.inner)
+    }
+
     /// Convenience function to add a timeout for termination using a
     /// [Tokio Sleep](https://docs.rs/tokio/1.2.0/tokio/time/struct.Sleep.html)
     #[cfg(feature = "tokio-timeout")]
@@ -158,13 +178,10 @@ impl Handle {
         result
     }
 
-
-    #[inline]
     pub fn is_shutting_down(&self) -> bool {
         self.0.is_shutting_down()
     }
 
-    #[inline]
     pub fn is_active(&self) -> bool {
         !self.is_shutting_down()
     }
@@ -245,6 +262,19 @@ impl Future for Shutdown {
             Poll::Ready(())
         } else {
             inner.set_waker(cx);
+            Poll::Pending
+        }
+    }
+}
+
+impl Future for ShutdownInitiated<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.0.is_shutting_down() {
+            Poll::Ready(())
+        } else {
+            self.0.set_waker(cx);
             Poll::Pending
         }
     }

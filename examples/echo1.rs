@@ -1,3 +1,4 @@
+// NB: When changing this file update the crate documentation as well.
 use graceful_shutdown::Shutdown;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;

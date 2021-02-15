@@ -143,6 +143,12 @@ impl Shutdown {
     }
 }
 
+impl Default for Shutdown {
+    fn default() -> Self {
+        Shutdown::new()
+    }
+}
+
 impl Handle {
     /// Initiate shutdown.
     ///

@@ -7,14 +7,13 @@ use tokio::{select, spawn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut shutdown = Shutdown::new();
+    let shutdown = Shutdown::new();
     let listener = TcpListener::bind("127.0.0.1:8000").await?;
-    spawn(shutdown.handle().shutdown_after(signal::ctrl_c()));
-    let handle = shutdown.handle();
+    spawn(shutdown.shutdown_after(signal::ctrl_c()));
     loop {
         select! {
             conn = listener.accept() => match conn {
-                Ok((mut conn, _)) => { spawn(handle.graceful(async move {
+                Ok((mut conn, _)) => { spawn(shutdown.graceful(async move {
                     let mut buf = [0; 1024];
                     loop {
                         let n = match conn.read(&mut buf).await {
@@ -33,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })); },
                 Err(e) => {
                     eprintln!("Error accepting connection; err = {:?}", e);
-                    handle.shutdown();
+                    shutdown.shutdown();
                 }
             },
             _ = shutdown.initiated() => {

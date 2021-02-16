@@ -1,4 +1,4 @@
-use super::Handle;
+use super::Shutdown;
 use futures_core::stream::Stream;
 use pin_project_lite::pin_project;
 use std::pin::Pin;
@@ -8,7 +8,7 @@ pin_project! {
     #[project = GracefulStreamProj]
     pub enum GracefulStream<S: Stream> {
         Running {
-            shutdown: Handle,
+            shutdown: Shutdown,
             #[pin]
             stream: S,
         },
@@ -17,7 +17,7 @@ pin_project! {
 }
 
 impl<S: Stream> GracefulStream<S> {
-    pub(crate) fn new(shutdown: Handle, stream: S) -> Self {
+    pub(crate) fn new(shutdown: Shutdown, stream: S) -> Self {
         GracefulStream::Running {
             shutdown,
             stream: stream,
@@ -37,7 +37,10 @@ impl<S: Stream> Stream for GracefulStream<S> {
                     self.set(GracefulStream::Done);
                     Poll::Ready(None)
                 }
-                res => res,
+                res => {
+                    shutdown.0.add_waker(cx);
+                    res
+                }
             },
         }
     }

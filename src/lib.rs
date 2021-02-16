@@ -17,14 +17,13 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut shutdown = Shutdown::new();
+//!     let shutdown = Shutdown::new();
 //!     let listener = TcpListener::bind("127.0.0.1:8000").await?;
-//!     spawn(shutdown.handle().shutdown_after(signal::ctrl_c()));
-//!     let handle = shutdown.handle();
+//!     spawn(shutdown.shutdown_after(signal::ctrl_c()));
 //!     loop {
 //!         select! {
 //!             conn = listener.accept() => match conn {
-//!                 Ok((mut conn, _)) => { spawn(handle.graceful(async move {
+//!                 Ok((mut conn, _)) => { spawn(shutdown.graceful(async move {
 //!                     let mut buf = [0; 1024];
 //!                     loop {
 //!                         let n = match conn.read(&mut buf).await {
@@ -43,7 +42,7 @@
 //!                 })); },
 //!                 Err(e) => {
 //!                     eprintln!("Error accepting connection; err = {:?}", e);
-//!                     handle.shutdown();
+//!                     shutdown.shutdown();
 //!                 }
 //!             },
 //!             _ = shutdown.initiated() => {
@@ -74,9 +73,8 @@ const MAX_PENDING: usize = usize::MAX >> 1;
 const ACTIVE_STATE: usize = !MAX_PENDING;
 
 /// Future for graceful shutdown.
-pub struct Shutdown {
-    inner: Arc<Inner>,
-}
+#[derive(Clone)]
+pub struct Shutdown(Arc<Inner>);
 
 pin_project! {
     pub struct WithTerminator<T: Future<Output=()>> {
@@ -86,14 +84,7 @@ pin_project! {
     }
 }
 
-struct ShutdownInitiated<'a>(&'a mut Arc<Inner>);
-
-/// A shared reference to a Shutdown.
-///
-/// This allows communicating with a `Shutdown` object without
-/// needing ownership to the
-#[derive(Clone)]
-pub struct Handle(Arc<Inner>);
+struct ShutdownInitiated<'a>(&'a Arc<Inner>);
 
 /// A drop guard to prevent final shutdown.
 ///
@@ -109,7 +100,7 @@ struct Inner {
     /// has not. The remaining bits are used to keep track of the number of pending
     /// tasks. Note that this sets a limit of `usize::MAX >> 1`
     state: AtomicUsize,
-    waker: Mutex<Option<Waker>>,
+    wakers: Mutex<Vec<Waker>>,
 }
 
 pin_project! {
@@ -122,17 +113,12 @@ pin_project! {
 
 impl Shutdown {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Inner {
+        Self(Arc::new(Inner {
                 state: AtomicUsize::new(ACTIVE_STATE),
-                waker: Mutex::new(None),
-            }),
-        }
-    }
-
-    /// Get a reference to manage the `Shutdown`
-    pub fn handle(&self) -> Handle {
-        Handle(self.inner.clone())
+            // We use an initial capacity of 2, because there probably won't be more
+            // than 2 futures waiting on this at a time.
+            wakers: Mutex::new(Vec::with_capacity(2)),
+        }))
     }
 
     /// Add an early termination condition.
@@ -158,15 +144,15 @@ impl Shutdown {
     /// ```
     pub fn with_terminator<T: Future<Output = ()>>(self, terminator: T) -> WithTerminator<T> {
         WithTerminator {
-            inner: self.inner,
+            inner: self.0,
             terminator,
         }
     }
 
     /// Return a `Future` that waits until shutdown has been initiated, but doesn't wait
     /// for pending tasks to complete.
-    pub fn initiated(&mut self) -> impl Future<Output = ()> + '_ {
-        ShutdownInitiated(&mut self.inner)
+    pub fn initiated(&self) -> impl Future<Output = ()> + '_ {
+        ShutdownInitiated(&self.0)
     }
 
     /// Convenience function to add a timeout for termination using a
@@ -188,15 +174,7 @@ impl Shutdown {
             async_io::Timer::after(dur).await;
         })
     }
-}
 
-impl Default for Shutdown {
-    fn default() -> Self {
-        Shutdown::new()
-    }
-}
-
-impl Handle {
     /// Initiate shutdown.
     ///
     /// This signals that a graceful shutdown shold be started. After calling this
@@ -216,7 +194,7 @@ impl Handle {
     /// # async fn ctrl_c() -> Result<(), ()> { Ok(()) }
     /// # fn cleanup() { }
     /// let shutdown = Shutdown::new();
-    /// let interrupt = shutdown.handle().shutdown_after(ctrl_c());
+    /// let interrupt = shutdown.shutdown_after(ctrl_c());
     /// async {
     ///     interrupt.await.expect("Unable to listen to signal");
     ///     // peform additional cleanup before shutting down
@@ -225,10 +203,13 @@ impl Handle {
     /// }
     /// # ;
     /// ```
-    pub async fn shutdown_after<F: Future>(self, f: F) -> F::Output {
+    pub fn shutdown_after<F: Future>(&self, f: F) -> impl Future<Output = F::Output> {
+        let handle = self.clone();
+        async move {
         let result = f.await;
-        self.shutdown();
+            handle.shutdown();
         result
+    }
     }
 
     pub fn is_shutting_down(&self) -> bool {
@@ -270,6 +251,12 @@ impl Handle {
     }
 }
 
+impl Default for Shutdown {
+    fn default() -> Self {
+        Shutdown::new()
+    }
+}
+
 impl Inner {
     fn shutdown(&self) {
         // Clear the "active" flag.
@@ -292,7 +279,7 @@ impl Inner {
     }
 
     fn wake(&self) {
-        if let Some(waker) = self.waker.lock().unwrap().take() {
+        for waker in self.wakers.lock().unwrap().drain(..) {
             waker.wake();
         }
     }
@@ -301,8 +288,11 @@ impl Inner {
         (self.state.load(Ordering::Relaxed) & ACTIVE_STATE) == 0
     }
 
-    fn set_waker(&self, cx: &mut Context<'_>) {
-        *self.waker.lock().unwrap() = Some(cx.waker().clone());
+    fn add_waker(&self, cx: &mut Context<'_>) {
+        let mut wakers = self.wakers.lock().unwrap();
+        if !wakers.iter().any(|w| w.will_wake(cx.waker())) {
+            wakers.push(cx.waker().clone());
+        }
     }
 }
 
@@ -310,11 +300,11 @@ impl Future for Shutdown {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let inner = &self.inner;
+        let inner = &self.0;
         if inner.state.load(Ordering::Relaxed) == 0 {
             Poll::Ready(())
         } else {
-            inner.set_waker(cx);
+            inner.add_waker(cx);
             Poll::Pending
         }
     }
@@ -327,7 +317,7 @@ impl Future for ShutdownInitiated<'_> {
         if self.0.is_shutting_down() {
             Poll::Ready(())
         } else {
-            self.0.set_waker(cx);
+            self.0.add_waker(cx);
             Poll::Pending
         }
     }
@@ -357,11 +347,11 @@ impl<T: Future<Output = ()>> Future for WithTerminator<T> {
             if state == 0 {
                 Poll::Ready(())
             } else {
-                self.inner.set_waker(cx);
+                self.inner.add_waker(cx);
                 self.project().terminator.poll(cx)
             }
         } else {
-            self.inner.set_waker(cx);
+            self.inner.add_waker(cx);
             Poll::Pending
         }
     }

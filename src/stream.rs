@@ -1,5 +1,5 @@
 use super::Shutdown;
-use futures_core::stream::Stream;
+use futures_core::stream::{FusedStream, Stream};
 use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -51,11 +51,31 @@ impl<S: Stream> Stream for GracefulStream<S> {
                     state.set(State::Done);
                     Poll::Ready(None)
                 }
+                Poll::Ready(None) => {
+                    state.set(State::Done);
+                    Poll::Ready(None)
+                }
                 res => {
                     shutdown.0.add_waker(cx);
                     res
                 }
             },
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self.state {
+            State::Done => (0, Some(0)),
+            State::Running { ref stream, .. } => stream.size_hint(),
+        }
+    }
+}
+
+impl<S: Stream> FusedStream for GracefulStream<S> {
+    fn is_terminated(&self) -> bool {
+        match self.state {
+            State::Done => true,
+            _ => false,
         }
     }
 }

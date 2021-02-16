@@ -2,7 +2,7 @@
 #![cfg_attr(docsrs, feature(extended_key_value_attributes))]
 //#![deny(missing_docs)]
 
-//! A library to make it easier to handle graceful shutdowns.
+//! A library to make it easier to handle graceful shutdowns in async code.
 //!
 //! This provides tools to wait for pending tasks to complete before finalizing shutdown.
 //!
@@ -73,10 +73,20 @@ const MAX_PENDING: usize = usize::MAX >> 1;
 const ACTIVE_STATE: usize = !MAX_PENDING;
 
 /// Future for graceful shutdown.
+///
+/// This is a [`Future`](std::future::Future) which doesn't complete until a shutdown has been
+/// initiated (for example with [`Shutdown::shutdown`]) and any pending tasks have been completed.
+///
+/// It also contains associated functions for keeping track of tasks that need to be completed
+/// before shutdown and an [`initiated`](Shutdown::initiated) function to create a future that only
+/// waits until shutdown has been initiated.
 #[derive(Clone)]
 pub struct Shutdown(Arc<Inner>);
 
 pin_project! {
+    /// Future for waiting for a shutdown with an escape hatch terminating condition.
+    ///
+    /// See [`Shutdown::with_terminator`].
     pub struct WithTerminator<T: Future<Output=()>> {
         inner: Arc<Inner>,
         #[pin]
@@ -104,6 +114,9 @@ struct Inner {
 }
 
 pin_project! {
+    /// Future that prevents shutting down until the wrapped future completes.
+    ///
+    /// See [`Shutdown::graceful`].
     pub struct Graceful<F: Future> {
         shutdown: Arc<Inner>,
         #[pin]
@@ -112,6 +125,7 @@ pin_project! {
 }
 
 impl Shutdown {
+    /// Createa a new [`Shutdown`].
     pub fn new() -> Self {
         Self(Arc::new(Inner {
             state: AtomicUsize::new(ACTIVE_STATE),
@@ -149,14 +163,16 @@ impl Shutdown {
         }
     }
 
-    /// Return a `Future` that waits until shutdown has been initiated, but doesn't wait
-    /// for pending tasks to complete.
+    /// Return a [`Future`](std::future::Future) that waits until shutdown has been initiated, but
+    /// doesn't wait for pending tasks to complete.
     pub fn initiated(&self) -> impl Future<Output = ()> + '_ {
         ShutdownInitiated(&self.0)
     }
 
     /// Convenience function to add a timeout for termination using a
-    /// [Tokio Sleep](https://docs.rs/tokio/1.2.0/tokio/time/struct.Sleep.html)
+    /// [Tokio Sleep](https://docs.rs/tokio/1.2.0/tokio/time/struct.Sleep.html).
+    ///
+    /// See [`Shutdown::with_terminator`].
     #[cfg(feature = "tokio-timeout")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio-timeout")))]
     pub fn with_timeout(self, dur: Duration) -> impl Future<Output = ()> {
@@ -167,6 +183,8 @@ impl Shutdown {
 
     /// Convenience function to add a timeout for termination using an
     /// [async-io Timer](https://docs.rs/async-io/1.3.1/async_io/struct.Timer.html)
+    ///
+    /// See [`Shutdown::with_terminator`].
     #[cfg(feature = "async-io-timeout")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async-io-timeout")))]
     pub fn with_timer(self, dur: Duration) -> impl Future<Output = ()> {
@@ -178,9 +196,9 @@ impl Shutdown {
     /// Initiate shutdown.
     ///
     /// This signals that a graceful shutdown shold be started. After calling this
-    /// `is_shutting_down` will return true for any reference to the same `Shutdown`
-    /// instance. And once all pending tasks are completed, the `Shutdown` future will
-    /// complete.
+    /// [`is_shutting_down`](Shutdown::is_shutting_down) will return true for any reference to the
+    /// same `Shutdown` instance. And once all pending tasks are completed, the `Shutdown` future
+    /// will complete.
     pub fn shutdown(&self) {
         self.0.shutdown();
     }
@@ -212,20 +230,26 @@ impl Shutdown {
         }
     }
 
+    /// Return true if shutdown as been initiated.
     pub fn is_shutting_down(&self) -> bool {
         self.0.is_shutting_down()
     }
 
+    /// Return true if shutdown has not yet been initiated.
     pub fn is_active(&self) -> bool {
         !self.is_shutting_down()
     }
 
-    /// Return how many tasks are currently pending
+    /// Return how many tasks are currently pending.
+    ///
+    /// This should not be relied on to be completely accurate in a multi-threaded context.
+    /// However, it may be useful for reporting approximately how much work still needs to be done
+    /// before shutting down the program.
     pub fn num_pending(&self) -> usize {
         self.0.state.load(Ordering::Relaxed) & MAX_PENDING
     }
 
-    /// Wrap a future so that it prevents the `Shutdown` future from completing until
+    /// Wrap a future so that it prevents the [`Shutdown`] future from completing until
     /// after this future completes.
     pub fn graceful<F: Future>(&self, task: F) -> Graceful<F> {
         self.0.start_task();
@@ -235,12 +259,13 @@ impl Shutdown {
         }
     }
 
-    /// Wrap a stream so that it stops producing items once shutdown is initiated.
+    /// Wrap a [`Stream`](https://docs.rs/futures-core/0.3/futures_core/stream/trait.Stream.html)
+    /// so that it stops producing items once shutdown is initiated.
     ///
-    /// The resulting stream returns the same results as the original stream, but
-    /// if a shutdown has been initiated, and the wrapped stream is pending, then the stream
-    /// will return `None` on the next poll, indicating the stream is closed. The inner stream
-    /// will also be dropped at that point.
+    /// The resulting stream returns the same results as the original stream, but if a shutdown has
+    /// been initiated, and the wrapped stream is pending, then the stream will return
+    /// [`None`](std::option::Option::None) on the next poll, indicating the stream is closed. The
+    /// inner stream will also be dropped at that point.
     ///
     /// This is useful for something like a TCP listener socket, so that you can have it stop
     /// accepting new connections once shutdown has been initiated.
@@ -249,7 +274,7 @@ impl Shutdown {
         GracefulStream::new(self.clone(), stream)
     }
 
-    /// Return an object that prevents the `Shutdown` future from completing while it is live.
+    /// Return an object that prevents the [`Shutdown`] future from completing while it is live.
     pub fn draining(&self) -> Draining {
         self.0.start_task();
         Draining(self.0.clone())

@@ -1,6 +1,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, feature(extended_key_value_attributes))]
-//#![deny(missing_docs)]
+#![deny(missing_docs)]
 
 //! A library to make it easier to handle graceful shutdowns in async code.
 //!

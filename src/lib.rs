@@ -114,7 +114,7 @@ pin_project! {
 impl Shutdown {
     pub fn new() -> Self {
         Self(Arc::new(Inner {
-                state: AtomicUsize::new(ACTIVE_STATE),
+            state: AtomicUsize::new(ACTIVE_STATE),
             // We use an initial capacity of 2, because there probably won't be more
             // than 2 futures waiting on this at a time.
             wakers: Mutex::new(Vec::with_capacity(2)),
@@ -206,10 +206,10 @@ impl Shutdown {
     pub fn shutdown_after<F: Future>(&self, f: F) -> impl Future<Output = F::Output> {
         let handle = self.clone();
         async move {
-        let result = f.await;
+            let result = f.await;
             handle.shutdown();
-        result
-    }
+            result
+        }
     }
 
     pub fn is_shutting_down(&self) -> bool {
@@ -218,6 +218,11 @@ impl Shutdown {
 
     pub fn is_active(&self) -> bool {
         !self.is_shutting_down()
+    }
+
+    /// Return how many tasks are currently pending
+    pub fn num_pending(&self) -> usize {
+        self.0.state.load(Ordering::Relaxed) & MAX_PENDING
     }
 
     /// Wrap a future so that it prevents the `Shutdown` future from completing until

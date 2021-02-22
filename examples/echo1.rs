@@ -3,7 +3,7 @@ use graceful_shutdown::Shutdown;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::{select, spawn};
+use tokio::spawn;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,9 +11,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:8000").await?;
     spawn(shutdown.shutdown_after(signal::ctrl_c()));
     loop {
-        select! {
-            conn = listener.accept() => match conn {
-                Ok((mut conn, _)) => { spawn(shutdown.graceful(async move {
+        match shutdown.cancel_on_shutdown(listener.accept()).await {
+            Some(Ok((mut conn, _))) => {
+                spawn(shutdown.graceful(async move {
                     let mut buf = [0; 1024];
                     loop {
                         let n = match conn.read(&mut buf).await {
@@ -29,13 +29,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             return;
                         }
                     }
-                })); },
-                Err(e) => {
-                    eprintln!("Error accepting connection; err = {:?}", e);
-                    shutdown.shutdown();
-                }
-            },
-            _ = shutdown.initiated() => {
+                }));
+            }
+            Some(Err(e)) => {
+                eprintln!("Error accepting connection; err = {:?}", e);
+                shutdown.shutdown();
+            }
+            None => {
                 eprintln!("Starting shutdown");
                 break;
             }

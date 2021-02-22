@@ -8,7 +8,7 @@
 //!
 //! ## Examples
 //!
-//! ```ignore
+//! ```no_run
 //! use graceful_shutdown::Shutdown;
 //! use tokio::io::{AsyncReadExt, AsyncWriteExt};
 //! use tokio::net::TcpListener;
@@ -21,41 +21,40 @@
 //!     let listener = TcpListener::bind("127.0.0.1:8000").await?;
 //!     spawn(shutdown.shutdown_after(signal::ctrl_c()));
 //!     loop {
-//!         select! {
-//!             conn = listener.accept() => match conn {
-//!                 Ok((mut conn, _)) => { spawn(shutdown.graceful(async move {
-//!                     let mut buf = [0; 1024];
-//!                     loop {
-//!                         let n = match conn.read(&mut buf).await {
-//!                             Ok(n) if n == 0 => return,
-//!                             Ok(n) => n,
-//!                             Err(e) => {
-//!                                 eprintln!("failed to read from socket; err = {:?}", e);
-//!                                 return;
-//!                             }
-//!                         };
-//!                         if let Err(e) = conn.write_all(&buf[0..n]).await {
-//!                             eprintln!("failed to write to socket; err = {:?}", e);
-//!                             return;
-//!                         }
-//!                     }
-//!                 })); },
-//!                 Err(e) => {
-//!                     eprintln!("Error accepting connection; err = {:?}", e);
-//!                     shutdown.shutdown();
-//!                 }
-//!             },
-//!             _ = shutdown.initiated() => {
-//!                 eprintln!("Starting shutdown");
-//!                 break;
-//!             }
-//!         }
+//!        match shutdown.cancel_on_shutdown(listener.accept()).await {
+//!            Some(Ok((mut conn, _))) => {
+//!                spawn(shutdown.graceful(async move {
+//!                    let mut buf = [0; 1024];
+//!                    loop {
+//!                        let n = match conn.read(&mut buf).await {
+//!                            Ok(n) if n == 0 => return,
+//!                            Ok(n) => n,
+//!                            Err(e) => {
+//!                                eprintln!("failed to read from socket; err = {:?}", e);
+//!                                return;
+//!                            }
+//!                        };
+//!                        if let Err(e) = conn.write_all(&buf[0..n]).await {
+//!                            eprintln!("failed to write to socket; err = {:?}", e);
+//!                            return;
+//!                        }
+//!                    }
+//!                }));
+//!            }
+//!            Some(Err(e)) => {
+//!                eprintln!("Error accepting connection; err = {:?}", e);
+//!                shutdown.shutdown();
+//!            }
+//!            None => {
+//!                eprintln!("Starting shutdown");
+//!                break;
+//!            }
+//!        }
 //!     }
 //!     shutdown.await;
 //!     Ok(())
 //! }
 //! ```
-//!
 //!
 
 #[cfg(feature = "stream")]
@@ -68,6 +67,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 #[cfg(any(feature = "tokio-timeout", feature = "async-io-timeout"))]
 use std::time::Duration;
+
+mod cancel;
+pub use cancel::CancelOnShutdown;
 
 const MAX_PENDING: usize = usize::MAX >> 1;
 const ACTIVE_STATE: usize = !MAX_PENDING;
@@ -93,8 +95,6 @@ pin_project! {
         terminator: T,
     }
 }
-
-struct ShutdownInitiated<'a>(&'a Arc<Inner>);
 
 /// A drop guard to prevent final shutdown.
 ///
@@ -161,12 +161,6 @@ impl Shutdown {
             inner: self.0,
             terminator,
         }
-    }
-
-    /// Return a [`Future`](std::future::Future) that waits until shutdown has been initiated, but
-    /// doesn't wait for pending tasks to complete.
-    pub fn initiated(&self) -> impl Future<Output = ()> + '_ {
-        ShutdownInitiated(&self.0)
     }
 
     /// Convenience function to add a timeout for termination using a
@@ -259,6 +253,48 @@ impl Shutdown {
         }
     }
 
+    /// Wrap a future so that it is cancelled if shutdown is initiated.
+    ///
+    /// If the future completes the result is returned in a `Some`. If it is canceled
+    /// due to shutdown, `None` is returned.
+    ///
+    /// # Examples
+    ///
+    /// Event loop with shutdown:
+    /// ```
+    /// # use std::future;
+    /// # use graceful_shutdown::Shutdown;
+    /// # fn getEvent() -> impl future::Future<Output=()> {
+    /// #   future::pending()
+    /// # }
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let shutdown = Shutdown::new();
+    ///
+    /// # shutdown.shutdown();
+    ///
+    /// loop {
+    ///     match shutdown.cancel_on_shutdown(getEvent()).await {
+    ///         Some(_) => unimplemented!(),
+    ///         None => break,
+    ///     }
+    /// }
+    ///
+    /// shutdown.await;
+    ///
+    /// # }
+    /// ```
+    ///
+    /// Future that waits for shutdown to be initiated:
+    /// ```
+    /// use graceful_shutdown::Shutdown;
+    /// let shutdown = Shutdown::new();
+    /// let future = shutdown.cancel_on_shutdown(std::future::pending::<()>());
+    /// ```
+    pub fn cancel_on_shutdown<F: Future>(&self, future: F) -> CancelOnShutdown<F> {
+        CancelOnShutdown::new(self.clone(), future)
+    }
+
     /// Wrap a [`Stream`](https://docs.rs/futures-core/0.3/futures_core/stream/trait.Stream.html)
     /// so that it stops producing items once shutdown is initiated.
     ///
@@ -335,19 +371,6 @@ impl Future for Shutdown {
             Poll::Ready(())
         } else {
             inner.add_waker(cx);
-            Poll::Pending
-        }
-    }
-}
-
-impl Future for ShutdownInitiated<'_> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.0.is_shutting_down() {
-            Poll::Ready(())
-        } else {
-            self.0.add_waker(cx);
             Poll::Pending
         }
     }

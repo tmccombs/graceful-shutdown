@@ -41,6 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     eprintln!("Shutting down");
-    shutdown.await;
+    shutdown
+        .with_timeout(std::time::Duration::from_secs(30))
+        .await;
     Ok(())
 }

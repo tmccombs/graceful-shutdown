@@ -39,10 +39,17 @@ features = ["rt", "macros", "time", "rt-multi-thread", "signal", "net", "io-util
 version = "0.1"
 features = ["net"]
 
+[dev-dependencies]
+smol = "1.2"
+
 [[example]]
 name = "echo1"
 
 [[example]]
 name = "echo_stream"
-path = "examples/echo_stream.rs"
-required-features = ["stream"]
+required-features = ["stream", "tokio-timeout"]
+
+[[example]]
+name = "smol_echo"
+required-features = ["async-io-timeout", "stream"]
+

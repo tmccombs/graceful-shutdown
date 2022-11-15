@@ -1,8 +1,8 @@
-use graceful_shutdown::Shutdown;
-use std::task::{Context, Poll};
-use std::pin::Pin;
 use futures_task::noop_waker_ref;
+use graceful_shutdown::Shutdown;
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::sync;
 
 #[test]
@@ -30,14 +30,14 @@ async fn terminator() {
     let shutdown = Shutdown::new();
     let _drain = shutdown.draining();
 
-    let terminated = shutdown.clone().with_terminator(async move {
-        rx.await.unwrap()
-    });
+    let terminated = shutdown
+        .clone()
+        .with_terminator(async move { rx.await.unwrap() });
 
     assert!(shutdown.is_active());
     shutdown.shutdown();
     assert!(shutdown.is_shutting_down());
-    assert_eq!(shutdown.num_pending(),  1);
+    assert_eq!(shutdown.num_pending(), 1);
     tx.send(()).unwrap();
     assert!(terminated.await);
 }
@@ -45,7 +45,7 @@ async fn terminator() {
 #[cfg(feature = "stream")]
 #[tokio::test]
 async fn stream_test() {
-    use tokio_stream::{StreamExt, wrappers::ReceiverStream};
+    use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     let shutdown = Shutdown::new();

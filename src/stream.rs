@@ -30,10 +30,7 @@ pin_project! {
 impl<S> GracefulStream<S> {
     pub(crate) fn new(shutdown: Shutdown, stream: S) -> Self {
         GracefulStream {
-            state: State::Running {
-                shutdown,
-                stream,
-            },
+            state: State::Running { shutdown, stream },
         }
     }
 }

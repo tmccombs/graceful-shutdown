@@ -41,3 +41,24 @@ async fn terminator() {
     tx.send(()).unwrap();
     assert!(terminated.await);
 }
+
+#[cfg(feature = "stream")]
+#[tokio::test]
+async fn stream_test() {
+    use tokio_stream::{StreamExt, wrappers::ReceiverStream};
+
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let shutdown = Shutdown::new();
+
+    let mut stream = shutdown.graceful_stream(ReceiverStream::new(rx));
+
+    tx.send(1).await.unwrap();
+    tx.send(2).await.unwrap();
+    tx.send(3).await.unwrap();
+
+    assert_eq!(stream.next().await, Some(1));
+    assert_eq!(stream.next().await, Some(2));
+    shutdown.shutdown();
+    assert_eq!(stream.next().await, Some(3));
+    assert_eq!(stream.next().await, None);
+}

@@ -154,6 +154,7 @@ impl Shutdown {
     /// # #[cfg(feature = "tokio-timeout")] {
     /// # use std::time::Duration;
     /// #
+    /// use graceful_shutdown::Shutdown;
     /// let shutdown = Shutdown::new().with_terminator(async {
     ///     tokio::time::sleep(Duration::from_secs(30)).await;
     /// });

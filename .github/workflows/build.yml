@@ -21,7 +21,7 @@ jobs:
       - name: Build
         run: cargo build --all-features
       - name: Test
-        run: cargo test
+        run: cargo test --all-features
       - name: Clippy
         run: cargo clippy --all-features
       - name: Format check

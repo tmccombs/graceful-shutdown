@@ -32,7 +32,7 @@ impl<S> GracefulStream<S> {
         GracefulStream {
             state: State::Running {
                 shutdown,
-                stream: stream,
+                stream,
             },
         }
     }
@@ -73,9 +73,6 @@ impl<S: Stream> Stream for GracefulStream<S> {
 
 impl<S: Stream> FusedStream for GracefulStream<S> {
     fn is_terminated(&self) -> bool {
-        match self.state {
-            State::Done => true,
-            _ => false,
-        }
+        matches!(self.state, State::Done)
     }
 }

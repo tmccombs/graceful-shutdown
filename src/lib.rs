@@ -143,6 +143,9 @@ impl Shutdown {
     /// signal (or combination) to force a full shutdown even if one or more tasks are taking
     /// longer than expected to finish.
     ///
+    /// The returned future has a boolean output that is `true` if the future was terminated early
+    /// due to the termination condition, and `false` if all remaining tasks completed normally.
+    ///
     /// Note that `terminator` will not start to be polled until after shutdown has been initiated.
     /// However, you may need to delay creation of the actual timeout future until
     /// the first poll, so that the end time is set correctly. This can be done using something
@@ -166,10 +169,12 @@ impl Shutdown {
     /// Convenience function to add a timeout for termination using a
     /// [Tokio Sleep](https://docs.rs/tokio/1.2.0/tokio/time/struct.Sleep.html).
     ///
+    /// The future returns `true` if the timeout triggered, and `false` otherwise.
+    ///
     /// See [`Shutdown::with_terminator`].
     #[cfg(feature = "tokio-timeout")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio-timeout")))]
-    pub fn with_timeout(self, dur: Duration) -> impl Future<Output = ()> {
+    pub fn with_timeout(self, dur: Duration) -> impl Future<Output = bool> {
         self.with_terminator(async move {
             tokio::time::sleep(dur).await;
         })
@@ -178,10 +183,12 @@ impl Shutdown {
     /// Convenience function to add a timeout for termination using an
     /// [async-io Timer](https://docs.rs/async-io/1.3.1/async_io/struct.Timer.html)
     ///
+    /// The future returns `true` if the timeout triggered, and `false` otherwise.
+    ///
     /// See [`Shutdown::with_terminator`].
     #[cfg(feature = "async-io-timeout")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async-io-timeout")))]
-    pub fn with_timer(self, dur: Duration) -> impl Future<Output = ()> {
+    pub fn with_timer(self, dur: Duration) -> impl Future<Output = bool> {
         self.with_terminator(async move {
             async_io::Timer::after(dur).await;
         })
@@ -392,16 +399,16 @@ impl<F: Future> Future for Graceful<F> {
 }
 
 impl<T: Future<Output = ()>> Future for WithTerminator<T> {
-    type Output = ();
+    type Output = bool;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         let state = self.inner.state.load(Ordering::Relaxed);
         if state & ACTIVE_STATE == 0 {
             if state == 0 {
-                Poll::Ready(())
+                Poll::Ready(false)
             } else {
                 self.inner.add_waker(cx);
-                self.project().terminator.poll(cx)
+                self.project().terminator.poll(cx).map(|_| true)
             }
         } else {
             self.inner.add_waker(cx);

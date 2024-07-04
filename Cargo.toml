@@ -42,7 +42,7 @@ version = "0.1"
 features = ["net"]
 
 [dev-dependencies]
-smol = "1.2"
+smol = "2.0"
 futures-task = "0.3"
 
 [[example]]
